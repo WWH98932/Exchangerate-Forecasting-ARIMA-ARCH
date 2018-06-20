@@ -1,0 +1,242 @@
+---
+title: "Untitled"
+author: "Minxuan Wang"
+date: "2018/3/12"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+Linear Regression:
+One common method used to forecast exchange rates involves gathering factors that we believe affect the movement of a certain currency and creating a model that relates these factors to the exchange rate. The factors used in econometric models are normally based on economic theory, but any variable can be added if it is believed to significantly influence the exchange rate. Like concluding the factors that are most influential are: the interest rate differential between the U.S. and EU (INT), the difference in GDP growth rates (GDP), and income growth rate (IGR) differences between the two countries. The econometric model he comes up with is shown as:
+USD/EUR (1-year) = z + a(INT) + b(GDP) + c(IGR)
+
+EUR vs USD Foreign Exchange Reference Rate Data from Quandl
+```{r}
+library(Quandl)
+USDEUR <- Quandl("CURRFX/USDEUR", api_key="QR_sKtW9xGJddDnfzCbT")
+```
+
+```{r}
+USDEUR <- USDEUR[rev(rownames(USDEUR)), ]
+rate <- ts(USDEUR$Rate)
+plot(rate, main=("USD/EUR exchange rate"))
+grid()
+ts.plot(rate)
+```
+
+Jarque - Bera Statistics  
+Jarque-Bera statistics is used to test the nonnormality of the EUR/USD exchange rate. 
+```{r}
+library(tseries)
+jarque.bera.test(rate)
+```
+According to the Jarque-Bera statistics, the EUR/USD rate is non-normal at the confidence interval of 99%, since probability is 2.2e-16 which is less than 0.01. So, it is required to transform the EUR/USD exchange rate series into the return series. Generally, the movements of the foreign exchange rates are usually non-stationary as well as quite random and not suitable for the study purpose.
+
+We will take the natural logarithm of the exchange rate first, it can also facilitate the study of the percentage change in the exchange rate and eliminate the influence of the measurement unit.
+```{r}
+lograte <- ts(log(USDEUR$Rate))
+plot(lograte, main="USD/EUR exchange rate, log")
+grid()
+```
+
+## Fit model
+The three main steps of this model, such as Identification, Estimation, and Model checking are elaborated as follows. Firstly, the stationarity of the time series is established. 
+Next, the conditional mean model for the given data is identified. 
+There are three rules to identify ARIMA model: If ACF (autocorrelation graph) cut off after lag n, PACF (partial autocorrelation graph) dies down: ARIMA(0, d, n) ==> identify MA(q)
+If ACF dies down, PACF cut off after lag n: ARIMA(n, d, 0) ==> identify AR(p)
+If ACF and PACF die down: mixed ARIMA model, need differencing Secondly, the model parameters are estimated by utilizing the maximum likelihood method. 
+Thirdly, the model checking is performed by diagnostics of randomness of the residuals. The residuals are required to be uncorrelated and normally distributed. Finally, one can perform forecasting with the chosen model over future finite time space. 
+
+#Test stationary and white noise
+#Here we can mention the result when we fit model of non-stationary time series without taking difference
+```{r}
+# ADF Test
+library(tseries)
+adf.test(lograte)
+qqnorm(lograte)
+```
+Due to the high p-value, we can't reject the null hypothesis: non-stationary, so our exchange rate time series is non-stationary, we have to take difference before future analysis.
+
+```{r}
+# Look at ACF Plot, lag is 1 year
+acf(log(USDEUR$Rate), lag.max=365, main="ACF of USD/EUR exchange rate")
+#pacf(log(USDEUR$Value), lag.max=365, main="PACF of USD/EUR exchange rate")
+```
+Also from visual inspection, we notice ACF trails off, it's non-stationary.
+
+Test white noise
+```{r}
+# Box Test
+Box.test(lograte, lag=1, type="Ljung-Box")
+```
+Reject Ho, which means it's not white noise.
+
+# So we can continue fitting ARMA model, after taking the first difference, dlograte follows an ARMA model while lograte follows an ARIMA model.
+
+First we take the first difference, now we get the percentage change in the exchange rate as $$dlograte=ln(rate_{t})-ln(rate_{t-1})=ln\left(\frac{rate_{t}}{rate_{t-1}}\right)$$ The differenced log rate, e.g. the return series, has economic meaning now.
+```{r}
+dlograte <- diff(lograte, 1)
+```
+
+ADF test again
+```{r}
+adf.test(dlograte)
+#Box.test(dlograte, lag=1, type="Ljung-Box")
+```
+p-value is less than 0.05 now, we can reject the null hypothesis.
+
+ACF plot again
+```{r}
+acf(dlograte)
+```
+Based on the above results, we see that there is no unit root in the differenced data. The differenced 
+log exchange rate appears to be stationary. 
+
+Plot the percentage change in exchange rate over time (can describe the trend of this plot, when it is going up/down...)
+```{r}
+plot(dlograte, main="The percentage change in exchange rate")
+grid()
+```
+The graph shows the first difference of the log exchange rate data that we found to be stationary.
+
+Build AR(p) and MA(q)
+```{r}
+par(mfrow=c(2,1))
+acf(dlograte, lag=60)
+pacf(dlograte, lag=60)
+
+pacf(dlograte, lag=240)
+```
+From the ACF and PACF plot of "dlograte", We notice ACF cuts off at lag.2, so our q = 2. Notice that PACF has a significant spike at lag.2, we can consider p = 2. However, when we expend the lag limit, more spikes are coming up, so basically we will try both of them: p = 2 and p = 0, e.g. ARIMA(2,1,2) and ARIMA(0,1,2) and compare their AIC and BIC value.
+
+Also use "auto.arima" function, let R help us
+```{r}
+library(forecast)
+auto.arima(lograte)
+```
+
+```{r}
+Arima(lograte, order=c(2,1,2))
+Arima(lograte, order=c(0,1,2))
+```
+Our full ARIMA model is:
+$$Y_{t}=-0.0465\epsilon_{t-1}-0.1321\epsilon_{t-2}+\epsilon_{t}$$
+
+Take a look at AIC and BIC, we choose ARIMA(0,1,2) model.
+```{r}
+arima <- Arima(lograte, order=c(0,1,2))
+```
+
+
+# Test our ARIMA model.
+
+Residuals vs Fitted Values plot
+```{r}
+plot(fitted(arima), arima$residuals, pch=20)
+abline(h=0, lwd=2, col="red")
+```
+The residuals are centered around 0, good.
+
+Residuals ACF and PACF plot
+```{r}
+par(mfrow=c(2,1))
+acf(arima$res, lag.max=60, main="Residual Sample ACF", xlab="Displacement")
+pacf(arima$res, lag.max=60, main="Residual Sample PACF", xlab="Displacement")
+```
+From the plots, the residuals' Autocorrelations and Partial Autocorrelations is basically 0 (in the dotted line), our model is pretty good!
+
+Use CUSUM to test our ARIMA model's parameter stability
+```{r}
+library(strucchange)
+plot(efp(arima$res ~ 1, type = "Rec-CUSUM"))
+```
+The function efp returns a one-dimensional empirical process of sums of residuals, if there is a single structural change point, the recursive CUSUM path will depart from its mean 0 at this point. Overall, the sums of residuals don't exceed the boundary line (the boundary line is 5% significant level critical line), the parameters' stability is pretty good.
+
+The respective Recursive Residuals
+```{r}
+y = recresid(arima$res ~ 1)
+plot(y, pch=20, ylab="Recursive Residuals")
+abline(h=0, lwd=2, col="red")
+mean(y)
+
+plot(arima$res)
+```
+Recursive residuals are standardized one-step-ahead prediction errors. Under the usual assumptions for the linear regression model they are (asymptotically) normal and i.i.d.. If model is correctly specified, recursive residuals have mean zero. From the result above, our model is perfect.
+```{r}
+Box.test(arima$res, lag=1, type="Ljung-Box")
+```
+
+
+## Use ARIMA(0,1,2) to forecast
+
+Forecast 2-steps ahead
+```{r}
+plot(forecast(arima,h=2), shadecols="oldstyle", main="Forecasts of USD/EUR exchange rate")
+# make it bigger
+plot(forecast(arima,h=2), shadecols="oldstyle", main="Forecasts of USD/EUR exchange rate", xlim=c(5460,5470))
+```
+
+Test predictive performance - accuracy
+```{r}
+train<-window(lograte, end=5461)
+test<-window(lograte, start=5461)
+fit <- arima(train, order=c(0,1,2))
+fcasts <- forecast(fit, h = 2)$mean
+accuracy(test, fcasts)
+
+```
+
+## Fit ARCH model
+In general white noise, the noise term $$\{e_{t}\}$$ might not be predicted linearly yet is probably predicted non-linearly by ARCH/GARCH model.
+
+After we get the ARIMA model, there are three things to do.
+
+First, use the residuals of the mean equation to test for ARCH effects. Ljung-Box Test for \(\epsilon_t^2\), or Lagrange Multiplier Test.
+Specify a volatility model if ARCH effects are statistically significant and perform a joint estimation of the mean and volatility equations.
+Check the fitted model carefully and refine it if necessary.
+
+Test if the square of residuals in our ARIMA model is white noise to see ARCH effect.
+```{r}
+# Box Test
+Box.test((arima$residuals)^2, lag=1, type="Ljung-Box")
+```
+The p-value is less than 0.01, so we can reject the null hypothesis: the residuals square is white noise. E.g. There is no correlation in the residual sequence, there exists ARCH effect.
+
+Also use the ArchTest function in package FinTS, this package has been removed from the R CRAN library, I time-traveled to the past and brought it back! Magic :)
+```{r}
+#install package 'FinTS' manually from CRAN 
+library(FinTS)
+ArchTest(arima$residuals)
+```
+The null hypothesis of Arch test is: The ARMA model doesn't have ARCH effect. Because the p-value is less than 0.01, so we can reject the null hypothesis. E.g. there exists ARCH effect.
+
+To determine the order, we use Partial Autocorrelation of squared series.
+```{r}
+plot((arima$residuals)^2, ylab="Squared Residual")
+acf((arima$residuals)^2, lag.max=20)
+pacf((arima$residuals)^2, lag.max=20)
+```
+There are 4 significant spikes in PACF plot of the residual square sequance. It's an ARCH(4) model.
+
+Let's say $$\epsilon_t=\sigma_t a_t$$ is return residual obtained after modelling a mean process or in other terms, $$r_t=~\mu_t+ \sigma_t^2 a_t$$. The random variable $$a_t$$ is white noise. The variance of residual series $$\sigma_t^2$$ is modelled as;
+$$\sigma_t^2=\alpha_0+\alpha_1 \epsilon_{t-1}^2+\cdots+\alpha_q \epsilon_{t-q}^2 = \alpha_0 + \sum_{i=1}^q \alpha_{i} \epsilon_{t-i}^2$$
+where $$\alpha_0>0$$, $$\alpha_i \geq 0$$ and $$i > 0$$.
+
+```{r}
+library(tseries)
+arch04 <- garch(arima$residuals,order=c(0,4),trace=F) 
+loglik04 <- logLik(arch04)
+summary(arch04)
+```
+The p-value for all parameters are less than 0.05, indicating that they are statistically significant. The p-value of Box-Ljung test is way greater than 0.05, we can't reject the null hypothesis: the autocorrelation of residuals is differ from 0, e.g. it is white noise. The model thus adequately represents the residuals.
+
+So the full ARCH(4) model is:
+$$\sigma_t^2=2.456\times 10^{-5}\epsilon_{t-1}^2+9.903\times 10^{-2}\epsilon_{t-1}^2+1.637\times 10^{-1}\epsilon_{t-2}^2+1.174\times 10^{-1}\epsilon_{t-3}^2+1.337\times 10^{-2}\epsilon_{t-4}^2$$
+
+Weaknesses of ARCH models
+The model assumes that positive and negative shocks have the same effects on volatility because it depends on the square of the previous shocks. In practice, it is well known that price of a financial asset responds differently to positive and negative shocks.
+The ARCH model is rather restrictive. The constraint becomes complicated for higher order ARCH models. In practice, it limits the ability of ARCH models with Gaussian innovations to capture excess kurtosis.
+The ARCH model does not provide any new insight for understanding the source of variations of a financial time series. It merely provides a mechanical way to describe the behavior of the conditional variance. It gives no indication about what causes such behavior to occur.
+ARCH models are likely to overpredict the volatility because they respond slowly to large isolated shocks to the return series.
